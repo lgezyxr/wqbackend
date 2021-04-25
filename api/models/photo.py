@@ -3,7 +3,7 @@ import hashlib
 import os
 from datetime import datetime
 from io import BytesIO
-from api.im2txt.sample import im2txt
+
 import magic
 import api.models
 import api.util as util
@@ -18,13 +18,14 @@ from django.core.cache import cache
 from api.exifreader import rotate_image
 from api.im2vec import Im2Vec
 from api.models.user import User, get_deleted_user
-from api.places365.places365 import place365_instance
+from api.places365.places365 import inference_places365
 from api.util import logger
+from django.contrib.postgres.fields import JSONField
 from django.core.files.base import ContentFile
 from django.db import models
 from geopy.geocoders import Nominatim
 from PIL import ImageOps
-from wand.image import Image
+
 
 class VisiblePhotoManager(models.Manager):
     def get_queryset(self):
@@ -48,10 +49,12 @@ class Photo(models.Model):
     exif_gps_lon = models.FloatField(blank=True, null=True)
     exif_timestamp = models.DateTimeField(blank=True, null=True, db_index=True)
 
-    exif_json = models.JSONField(blank=True, null=True)
+    exif_json = JSONField(blank=True, null=True)
 
-    geolocation_json = models.JSONField(blank=True, null=True, db_index=True)
-    captions_json = models.JSONField(blank=True, null=True, db_index=True)
+    geolocation_json = JSONField(blank=True, null=True, db_index=True)
+    captions_json = JSONField(blank=True, null=True, db_index=True)
+
+    prediction_result = models.TextField(blank=True, null=True, db_index=True)
 
     search_captions = models.TextField(blank=True, null=True, db_index=True)
     search_location = models.TextField(blank=True, null=True, db_index=True)
@@ -78,37 +81,49 @@ class Photo(models.Model):
         self.image_hash = hash_md5.hexdigest() + str(self.owner.id)
         self.save()
 
-    def _generate_captions_im2txt(self,commit=True):
+    def _generate_captions_im2txt(self, caption_content):
         image_path = self.thumbnail_big.path
         captions = self.captions_json
         search_captions = self.search_captions
-        try:
-            caption = im2txt(image_path)
-            caption = caption.replace("<start>",
-                                      '').replace("<end>", '').strip().lower()
-            captions['im2txt'] = caption
-            self.captions_json = captions
-            # todo: handle duplicate captions
-            self.search_captions = search_captions + caption
-            if commit:
-                self.save()
-            util.logger.info(
-                'generated im2txt captions for image %s. caption: %s' %
-                (image_path, caption))
-            return True
-        except:
-            util.logger.warning(
-                'could not generate im2txt captions for image %s' % image_path)
-            return False
+        # try:
+        #     caption = im2txt(image_path)
+        #     caption = caption.replace("<start>",
+        #                               '').replace("<end>", '').strip().lower()
+        #     captions['im2txt'] = caption
+        #     self.captions_json = captions
+        #     # todo: handle duplicate captions
+        #     self.search_captions = search_captions + caption
+        #     self.save()
+        #     util.logger.info(
+        #         'generated im2txt captions for image %s. caption: %s' %
+        #         (image_path, caption))
+        #     return True
+        # except:
+        #     util.logger.warning(
+        #         'could not generate im2txt captions for image %s' % image_path)
+        #     return False
+        captions['im2txt'] = caption_content
+        self.captions_json = captions
+        self.search_captions = search_captions + caption_content
+        self.save()
+        return True
 
-    def _generate_captions(self,commit):
+    
+    def _predict_result(self):
+        image_path = self.thumbnail_big.path
+        util.logger.info('predicting ' + image_path)
+        self.prediction_result = util.get_prediction_from_api(image_path)
+        self.save()
+        return True
+
+    def _generate_captions(self):
         image_path = self.thumbnail_big.path
         captions = {}
 
         # places365
         try:
             confidence = self.owner.confidence
-            res_places365 = place365_instance.inference_places365(image_path, confidence)
+            res_places365 = inference_places365(image_path, confidence)
             captions['places365'] = res_places365
             self.captions_json = captions
             if self.search_captions:
@@ -118,8 +133,8 @@ class Photo(models.Model):
             else:
                 self.search_captions = ' , '.join(
                     res_places365['categories'] + [res_places365['environment']])
-            if commit:
-                self.save()
+
+            self.save()
             util.logger.info(
                 'generated places365 captions for image %s.' % (image_path))
         except Exception as e:
@@ -127,68 +142,75 @@ class Photo(models.Model):
                 'could not generate places365 captions for image %s' %
                 image_path)
 
-    def _generate_thumbnail(self,commit=True):
-        if not os.path.exists(os.path.join(ownphotos.settings.MEDIA_ROOT,'thumbnails_big', self.image_hash + '.jpg').strip()):
-            with Image(filename=self.image_path) as img:
-                with BytesIO() as transfer:
-                    with img.clone() as thumbnail: 
-                        thumbnail.format = "jpg" 
-                        thumbnail.transform(resize='x' + str(ownphotos.settings.THUMBNAIL_SIZE_BIG[1]))
-                        thumbnail.compression_quality = 80
-                        thumbnail.auto_orient()
-                        thumbnail.save(transfer)
-                    self.thumbnail_big.save(self.image_hash + '.jpg', ContentFile(transfer.getvalue()))
+    def isHeic(self):
+        try:
+            filetype = magic.from_buffer(open(self.image_path,"rb").read(2048), mime=True)
+            return 'heic' in filetype or 'heif' in filetype
+        except:
+            util.logger.exception("An image throwed an exception")
+            return False
+    
+    def get_pil_image(self):
+        if self.isHeic():
+            heif_file = pyheif.read(self.image_path)
+            image = PIL.Image.frombytes(
+                heif_file.mode, 
+                heif_file.size, 
+                heif_file.data,
+                "raw",
+                heif_file.mode,
+                heif_file.stride,
+                )
+        else:
+            image = PIL.Image.open(self.image_path)
+        image = rotate_image(image)
+        if image.mode != 'RGB':
+                image = image.convert('RGB')
+        return image
+
+    def _generate_thumbnail(self):
+        image = self.get_pil_image()
+        if not os.path.exists(os.path.join(ownphotos.settings.MEDIA_ROOT,'thumbnails_big', self.image_hash + '.jpg').strip()):            
+            image.thumbnail(ownphotos.settings.THUMBNAIL_SIZE_BIG,
+                            PIL.Image.ANTIALIAS)
+            image_io_thumb = BytesIO()
+            image.save(image_io_thumb, format="JPEG")
+            self.thumbnail_big.save(
+                self.image_hash + '.jpg',
+                ContentFile(image_io_thumb.getvalue()))
+            image_io_thumb.close()
         #thumbnail already exists, add to photo
         else:
             self.thumbnail_big.name=os.path.join('thumbnails_big', self.image_hash + '.jpg').strip()
 
         if not os.path.exists(os.path.join(ownphotos.settings.MEDIA_ROOT,'square_thumbnails', self.image_hash + '.jpg').strip()):
-            with Image(filename=self.image_path) as img:
-                with BytesIO() as transfer:
-                    with img.clone() as thumbnail: 
-                        thumbnail.format = "jpg"
-                        dst_landscape = 1 > thumbnail.width / thumbnail.height
-                        wh = thumbnail.width if dst_landscape else thumbnail.height
-                        thumbnail.crop(
-                            left=int((thumbnail.width - wh) / 2),
-                            top=int((thumbnail.height - wh) / 2),
-                            width=int(wh),
-                            height=int(wh)
-                        )
-                        thumbnail.resize(width=ownphotos.settings.THUMBNAIL_SIZE_MEDIUM[0], height=ownphotos.settings.THUMBNAIL_SIZE_MEDIUM[1])
-                        thumbnail.resolution = (ownphotos.settings.THUMBNAIL_SIZE_MEDIUM[0], ownphotos.settings.THUMBNAIL_SIZE_MEDIUM[1])                       
-                        thumbnail.compression_quality = 80
-                        thumbnail.auto_orient()
-                        thumbnail.save(transfer)
-                    self.square_thumbnail.save(self.image_hash + '.jpg', ContentFile(transfer.getvalue()))
+            square_thumb = ImageOps.fit(image,
+                                        ownphotos.settings.THUMBNAIL_SIZE_MEDIUM,
+                                    PIL.Image.ANTIALIAS)
+            image_io_square_thumb = BytesIO()
+            square_thumb.save(image_io_square_thumb, format="JPEG")
+            self.square_thumbnail.save(
+                self.image_hash + '.jpg',
+                ContentFile(image_io_square_thumb.getvalue()))
+            image_io_square_thumb.close()
         #thumbnail already exists, add to photo
         else:
             self.square_thumbnail.name=os.path.join('square_thumbnails', self.image_hash + '.jpg').strip()
 
         if not os.path.exists(os.path.join(ownphotos.settings.MEDIA_ROOT,'square_thumbnails_small', self.image_hash + '.jpg').strip()):
-            with Image(filename=self.image_path) as img:
-                with BytesIO() as transfer:
-                    with img.clone() as thumbnail: 
-                        thumbnail.format = "jpg"
-                        dst_landscape = 1 > thumbnail.width / thumbnail.height
-                        wh = thumbnail.width if dst_landscape else thumbnail.height
-                        thumbnail.crop(
-                            left=int((thumbnail.width - wh) / 2),
-                            top=int((thumbnail.height - wh) / 2),
-                            width=int(wh),
-                            height=int(wh)
-                        )
-                        thumbnail.resize(width=ownphotos.settings.THUMBNAIL_SIZE_SMALL[0], height=ownphotos.settings.THUMBNAIL_SIZE_SMALL[1])
-                        thumbnail.resolution = (ownphotos.settings.THUMBNAIL_SIZE_SMALL[0], ownphotos.settings.THUMBNAIL_SIZE_SMALL[1])
-                        thumbnail.compression_quality = 80
-                        thumbnail.auto_orient()
-                        thumbnail.save(transfer)
-                    self.square_thumbnail_small.save(self.image_hash + '.jpg', ContentFile(transfer.getvalue()))
+            square_thumb = ImageOps.fit(image,
+                                    ownphotos.settings.THUMBNAIL_SIZE_SMALL,
+                                    PIL.Image.ANTIALIAS)
+            image_io_square_thumb = BytesIO()
+            square_thumb.save(image_io_square_thumb, format="JPEG")
+            self.square_thumbnail_small.save(
+                self.image_hash + '.jpg',
+                ContentFile(image_io_square_thumb.getvalue()))
+            image_io_square_thumb.close()
         #thumbnail already exists, add to photo
         else:
             self.square_thumbnail_small.name=os.path.join('square_thumbnails_small', self.image_hash + '.jpg').strip()
-        if commit:
-            self.save()
+        self.save()
 
     def _save_image_to_db(self):
         image = self.get_pil_image()
@@ -211,7 +233,7 @@ class Photo(models.Model):
                 old_album_date = possible_old_album_date
         return old_album_date
 
-    def _extract_date_time_from_exif(self,commit=True):
+    def _extract_date_time_from_exif(self):
         date_format = "%Y:%m:%d %H:%M:%S"
         timestamp_from_exif = None
         with open(self.image_path, 'rb') as fimg:
@@ -231,7 +253,7 @@ class Photo(models.Model):
 
         if(self.exif_timestamp != timestamp_from_exif):
             self.exif_timestamp = timestamp_from_exif
-
+        
         if old_album_date is not None:
             old_album_date.photos.remove(self)
             old_album_date.save()
@@ -244,12 +266,11 @@ class Photo(models.Model):
         else:
             album_date = api.models.album_date.get_or_create_album_date(date=None, owner=self.owner)
             album_date.photos.add(self)
-        cache.clear()
-        if commit:
-            self.save()
+        cache.clear()     
         album_date.save()
+        self.save()
 
-    def _extract_gps_from_exif(self,commit=True):
+    def _extract_gps_from_exif(self):
         with open(self.image_path, 'rb') as fimg:
             exif = exifread.process_file(fimg, details=False)
             serializable = dict(
@@ -272,8 +293,7 @@ class Photo(models.Model):
                     self.exif_gps_lat = -float(self.exif_gps_lat)
             else:
                 self.exif_gps_lat = None
-        if commit:
-            self.save()
+        self.save()
 
     def _geolocate(self):
         if not (self.exif_gps_lat and self.exif_gps_lon):
@@ -289,7 +309,7 @@ class Photo(models.Model):
             except:
                 util.logger.exception('something went wrong with geolocating')
 
-    def _geolocate_mapbox(self,commit=True):
+    def _geolocate_mapbox(self):
         if not (self.exif_gps_lat and self.exif_gps_lon):
             self._extract_gps_from_exif()
         if (self.exif_gps_lat and self.exif_gps_lon):
@@ -303,19 +323,18 @@ class Photo(models.Model):
                             'search_text']
                     else:
                         self.search_location = res['search_text']
-                if commit:
-                    self.save()
+                util.logger.exception('geolocating with ' + res['search_text'])
+                self.save()
             except:
                 util.logger.exception('something went wrong with geolocating')
 
-    def _im2vec(self,commit=True):
+    def _im2vec(self):
         try:
             im2vec = Im2Vec(cuda=False)
             image = PIL.Image.open(self.square_thumbnail)
             vec = im2vec.get_vec(image)
             self.encoding = vec.tobytes().hex()
-            if commit:
-                self.save()
+            self.save()
         except:
             util.logger.exception('something went wrong with im2vec')
 
@@ -326,7 +345,7 @@ class Photo(models.Model):
             unknown_person.save()
         else:
             unknown_person = qs_unknown_person[0]
-        image = np.array(PIL.Image.open(self.thumbnail_big.path))
+        image = np.array(self.get_pil_image())
 
         face_locations = face_recognition.face_locations(image)
         face_encodings = face_recognition.face_encodings(

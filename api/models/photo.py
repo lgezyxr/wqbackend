@@ -104,7 +104,7 @@ class Photo(models.Model):
         #     return False
         captions['im2txt'] = caption_content
         self.captions_json = captions
-        self.search_captions = search_captions + caption_content
+        self.search_captions = caption_content
         self.save()
         return True
 

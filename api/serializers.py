@@ -7,7 +7,7 @@ from django.db.models import Count, Prefetch, Q
 from rest_framework import serializers
 from django.core.cache import cache
 from api.image_similarity import search_similar_image
-from api.models import (AlbumAuto, AlbumDate, AlbumPlace, AlbumThing,
+from api.models import (AlbumAuto, AlbumDate, AlbumPlace, AlbumThing, AlbumCase,
                         AlbumUser, Face, LongRunningJob, Person, Photo, User)
 from api.util import logger
 
@@ -336,6 +336,95 @@ class AlbumDateSerializer(serializers.ModelSerializer):
     class Meta:
         model = AlbumDate
         fields = ("id", "title", "date", "favorited", "photos")
+
+
+class AlbumCaseSerializer(serializers.ModelSerializer):
+    photos = PhotoSuperSimpleSerializer(many=True, read_only=True)
+    shared_to = SimpleUserSerializer(many=True, read_only=True)
+    owner = SimpleUserSerializer(many=False, read_only=True)
+
+
+    class Meta:
+        model = AlbumCase
+        fields = ("id", "title", "photos", "created_on", "favorited", "owner",
+                  "shared_to")
+
+class AlbumCaseListSerializer(serializers.ModelSerializer):
+    owner = SimpleUserSerializer(many=False, read_only=True)
+    cover_photos = PhotoHashListSerializer(many=True, read_only=True)
+    photo_count = serializers.SerializerMethodField()
+    shared_to = SimpleUserSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = AlbumCase
+        fields = (
+            "id",
+            "cover_photos",
+            "created_on",
+            "favorited",
+            "title",
+            "shared_to",
+            "owner",
+            "photo_count")
+
+    def get_photo_count(self, obj):
+        try:
+            return obj.photo_count
+        except:  # for when calling AlbumUserListSerializer(obj).data directly
+            return obj.photos.count()
+
+
+class AlbumCaseEditSerializer(serializers.ModelSerializer):
+    photos = serializers.PrimaryKeyRelatedField(
+        many=True, read_only=False, queryset=Photo.objects.all())
+
+    class Meta:
+        model = AlbumCase
+        fields = ("id", "title", "photos", "created_on", "favorited")
+
+    def validate_photos(self, value):
+        return [v.image_hash for v in value]
+
+    def create(self, validated_data):
+        title = validated_data['title']
+        image_hashes = validated_data['photos']
+
+        user = None
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            user = request.user
+
+        # check if an album exists with the given title and call the update method if it does
+        instance, created = AlbumCase.objects.get_or_create(
+            title=title, owner=user)
+        if not created:
+            return self.update(instance, validated_data)
+
+        photos = Photo.objects.in_bulk(image_hashes)
+        for pk, obj in photos.items():
+            instance.photos.add(obj)
+        instance.save()
+        cache.clear()
+        logger.info(u'Created user album {} with {} photos'.format(
+            instance.id, len(photos)))
+        return instance
+
+    def update(self, instance, validated_data):
+        image_hashes = validated_data['photos']
+
+        photos = Photo.objects.in_bulk(image_hashes)
+        photos_already_in_album = instance.photos.all()
+        cnt = 0
+        for pk, obj in photos.items():
+            if obj not in photos_already_in_album:
+                cnt += 1
+                instance.photos.add(obj)
+        instance.save()
+        cache.clear()
+        logger.info(u'Added {} photos to case album {}'.format(
+            cnt, instance.id))
+        return instance
+
 
 
 class AlbumDateListSerializer(serializers.ModelSerializer):

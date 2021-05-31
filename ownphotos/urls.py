@@ -96,9 +96,18 @@ router.register(
     views.AlbumThingListViewSet,
     basename='album_thing')
 router.register(
+    r'api/albums/case/list',
+    views.AlbumCaseListViewSet,
+    basename='album_case')
+router.register(
     r'api/albums/place/list',
     views.AlbumPlaceListViewSet,
     basename='album_place')
+# router.register(
+#     r'api/albums/case/list',
+#     views.AlbumCaseListViewSet,
+#     basename='album_case')
+
 router.register(
     r'api/albums/user/list',
     views.AlbumUserListViewSet,
@@ -108,6 +117,11 @@ router.register(
     r'api/albums/user/edit',
     views.AlbumUserEditViewSet,
     basename='album_user')
+    
+router.register(
+    r'api/albums/case/edit',
+    views.AlbumCaseEditViewSet,
+    basename='album_case')
 
 router.register(
     r'api/albums/user/shared/tome',
@@ -126,7 +140,11 @@ router.register(r'api/albums/date', views.AlbumDateViewSet)
 router.register(
     r'api/albums/thing', views.AlbumThingViewSet, basename='album_thing')
 router.register(
+    r'api/albums/case', views.AlbumCaseViewSet, basename='album_case')
+router.register(
     r'api/albums/place', views.AlbumPlaceViewSet, basename='album_place')
+# router.register(
+#     r'api/albums/case', views.AlbumCaseViewSet, basename='album_case')
 router.register(
     r'api/albums/user', views.AlbumUserViewSet, basename='album_user')
 
@@ -210,6 +228,7 @@ urlpatterns = [
     url(r'^api/socialgraph', views.SocialGraphView.as_view()),
     url(r'^api/egograph', views.EgoGraphView.as_view()),
     url(r'^api/scanphotos', views.ScanPhotosView.as_view()),
+
     url(r'^api/autoalbumgen', views.AutoAlbumGenerateView.as_view()),
     url(r'^api/autoalbumtitlegen', views.RegenerateAutoAlbumTitles.as_view()),
     url(r'^api/searchtermexamples', views.SearchTermExamples.as_view()),
@@ -231,7 +250,7 @@ urlpatterns = [
     url(r'^media/(?P<path>.*)/(?P<fname>.*)',
         views.MediaAccessFullsizeOriginalView.as_view(),
         name='media'),
-
+#    url(r'^api/createalbumcase/$', views.AlbumCaseCreateView.as_view()),
     url(r'^api/rqavailable/$', views.QueueAvailabilityView.as_view()),
     url(r'^api/rqjobstat/$', views.RQJobStatView.as_view()),
     url(r'^api/rqjoblist/$', views.ListAllRQJobsView.as_view()),

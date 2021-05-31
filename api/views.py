@@ -28,17 +28,18 @@ from api.api_util import (get_count_stats, get_search_term_examples,
                           path_to_dict, get_location_clusters, get_location_sunburst, get_searchterms_wordcloud, get_location_timeline, get_photo_month_counts)
 from api.directory_watcher import scan_photos
 from api.drf_optimize import OptimizeRelatedModelViewSetMetaclass
-from api.models import (AlbumAuto, AlbumDate, AlbumPlace, AlbumThing,
+from api.models import (AlbumAuto, AlbumDate, AlbumPlace, AlbumThing, AlbumCase,
                         AlbumUser, Face, LongRunningJob, Person, Photo, User)
 from api.models.person import get_or_create_person
 from api.permissions import (IsOwnerOrReadOnly, IsPhotoOrAlbumSharedTo,
                              IsRegistrationAllowed, IsUserOrReadOnly)
 from api.serializers import (AlbumAutoListSerializer, AlbumAutoSerializer,
                              AlbumDateListSerializer, AlbumDateSerializer,
+                             AlbumCaseListSerializer, AlbumCaseSerializer,
                              AlbumPersonListSerializer, AlbumPersonSerializer,
                              AlbumPlaceListSerializer, AlbumPlaceSerializer,
                              AlbumThingListSerializer, AlbumThingSerializer,
-                             AlbumUserEditSerializer, AlbumUserListSerializer,
+                             AlbumUserEditSerializer, AlbumUserListSerializer,AlbumCaseEditSerializer,
                              AlbumUserSerializer, FaceListSerializer,
                              FaceSerializer, LongRunningJobSerializer,
                              ManageUserSerializer, PersonSerializer,
@@ -702,6 +703,68 @@ class AlbumPersonListViewSet(viewsets.ModelViewSet):
     @cache_response(CACHE_TTL, key_func=CustomListKeyConstructor())
     def list(self, *args, **kwargs):
         return super(AlbumPersonListViewSet, self).list(*args, **kwargs)
+
+@six.add_metaclass(OptimizeRelatedModelViewSetMetaclass)
+class AlbumCaseViewSet(viewsets.ModelViewSet):
+    serializer_class = AlbumCaseSerializer
+    pagination_class = StandardResultsSetPagination
+
+    def get_queryset(self):
+        qs = AlbumCase.objects.filter(
+            Q(owner=self.request.user)
+            | Q(shared_to__exact=self.request.user.id)).distinct(
+                'id').order_by('-id')
+        return qs
+
+    @cache_response(CACHE_TTL, key_func=CustomObjectKeyConstructor())
+    def retrieve(self, *args, **kwargs):
+        return super(AlbumCaseViewSet, self).retrieve(*args, **kwargs)
+
+    @cache_response(CACHE_TTL, key_func=CustomListKeyConstructor())
+    def list(self, *args, **kwargs):
+        return super(AlbumCaseViewSet, self).list(*args, **kwargs)
+
+@six.add_metaclass(OptimizeRelatedModelViewSetMetaclass)
+class AlbumCaseListViewSet(viewsets.ModelViewSet):
+    serializer_class = AlbumCaseListSerializer
+    pagination_class = StandardResultsSetPagination
+    filter_backends = (filters.SearchFilter, )
+    search_fields = (['title'])
+
+    def get_queryset(self):
+        return AlbumCase.objects.filter(owner=self.request.user) \
+            .annotate(photo_count=Count('photos', filter=Q(photos__hidden=False), distinct=True)) \
+            .filter(Q(photo_count__gt=0)&Q(owner=self.request.user)) \
+            .order_by('-created_on') \
+            .prefetch_related(
+                Prefetch(
+                    'photos',
+                    queryset=Photo.visible.only('image_hash')))
+
+    @cache_response(CACHE_TTL, key_func=CustomObjectKeyConstructor())
+    def retrieve(self, *args, **kwargs):
+        return super(AlbumCaseListViewSet, self).retrieve(*args, **kwargs)
+
+    @cache_response(CACHE_TTL, key_func=CustomListKeyConstructor())
+    def list(self, *args, **kwargs):
+        return super(AlbumCaseListViewSet, self).list(*args, **kwargs)
+
+@six.add_metaclass(OptimizeRelatedModelViewSetMetaclass)
+class AlbumCaseEditViewSet(viewsets.ModelViewSet):
+    serializer_class = AlbumCaseEditSerializer
+    pagination_class = StandardResultsSetPagination
+
+    @cache_response(CACHE_TTL, key_func=CustomObjectKeyConstructor())
+    def retrieve(self, *args, **kwargs):
+        return super(AlbumCaseEditViewSet, self).retrieve(*args, **kwargs)
+
+    @cache_response(CACHE_TTL, key_func=CustomListKeyConstructor())
+    def list(self, *args, **kwargs):
+        return super(AlbumCaseEditViewSet, self).list(*args, **kwargs)
+
+    def get_queryset(self):
+        return AlbumCase.objects.filter(
+            owner=self.request.user).order_by('title')
 
 
 @six.add_metaclass(OptimizeRelatedModelViewSetMetaclass)

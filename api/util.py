@@ -99,7 +99,7 @@ def mapbox_reverse_geocode(lat,lon):
         return {}
 
 def get_prediction_from_api(image_path):
-    api_url = "http://35.222.127.213:8003/webAPI"
+    api_url = "localhost:8003/webAPI"
     with open(image_path, "rb") as a_file:
         file_dict = {"images" : a_file}
         logger.info('read image, sending to prediction api')

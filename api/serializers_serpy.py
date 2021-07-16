@@ -26,6 +26,7 @@ class SharedPhotoSuperSimpleSerializer(serpy.Serializer):
     favorited = serpy.BoolField()
     public = serpy.BoolField()
     hidden = serpy.BoolField()
+    video = serpy.BoolField()
     exif_timestamp = DateTimeField()
     owner = SimpleUserSerializer()
     shared_to = SimpleUserSerializer(
@@ -37,8 +38,9 @@ class PhotoSuperSimpleSerializer(serpy.Serializer):
     favorited = serpy.BoolField()
     public = serpy.BoolField()
     hidden = serpy.BoolField()
+    video = serpy.BoolField()
     exif_timestamp = DateTimeField()
-    # shared_to_count = serpy.IntField()
+    allow_null = False
 
 
 class PhotoSuperSimpleSerializerWithAddedOn(serpy.Serializer):
@@ -46,17 +48,18 @@ class PhotoSuperSimpleSerializerWithAddedOn(serpy.Serializer):
     favorited = serpy.BoolField()
     public = serpy.BoolField()
     hidden = serpy.BoolField()
+    video = serpy.BoolField()
     exif_timestamp = DateTimeField()
     added_on = DateTimeField()
 
 
 class AlbumDateListWithPhotoHashSerializer(serpy.Serializer):
-    #     photos = PhotoSuperSimpleSerializer(many=True, call=True, attr='ordered_photos')
     photos = PhotoSuperSimpleSerializer(
         many=True, call=True, attr='photos.all')
     location = serpy.Field()
     id = serpy.IntField()
     date = DateTimeField()
+    allow_null = False
 
 
 # todo

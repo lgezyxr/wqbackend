@@ -166,7 +166,6 @@ class Migration(migrations.Migration):
                 ('geolocation_json', django.contrib.postgres.fields.jsonb.JSONField(blank=True, db_index=True, null=True)),
                 ('captions_json', django.contrib.postgres.fields.jsonb.JSONField(blank=True, db_index=True, null=True)),
                 ('search_captions', models.TextField(blank=True, db_index=True, null=True)),
-                # ('prediction_result', models.TextField(blank=True, null=True)),
                 ('search_location', models.TextField(blank=True, db_index=True, null=True)),
                 ('favorited', models.BooleanField(db_index=True, default=False)),
                 ('hidden', models.BooleanField(db_index=True, default=False)),

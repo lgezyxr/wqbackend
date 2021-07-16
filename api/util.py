@@ -79,27 +79,31 @@ def compute_bic(kmeans,X):
     return(BIC)
 
 def mapbox_reverse_geocode(lat,lon):
+    # mapbox_api_key = os.environ.get('MAPBOX_API_KEY', '')
     mapbox_api_key = "pk.eyJ1IjoibGdlenl4ciIsImEiOiJja2p1OGt4dXAwbmo1MnpvOG5kZWZ4OXhvIn0.pkULFA2Fm8vguK7YRR3Gmw"
+    if mapbox_api_key == '':
+      return {}
+
     url = "https://api.mapbox.com/geocoding/v5/mapbox.places/%f,%f.json?access_token=%s"%(lon,lat,mapbox_api_key)
     resp = requests.get(url)
     if resp.status_code == 200:
-        resp_json = resp.json()
-        search_terms = []
+      resp_json = resp.json()
+      search_terms = []
+      if 'features' in resp_json.keys():
+          for feature in resp_json['features']:
+              search_terms.append(feature['text'])
 
-        if 'features' in resp_json.keys():
-            for feature in resp_json['features']:
-                search_terms.append(feature['text'])
-
-        resp_json['search_text'] = ' '.join(search_terms)
-        logger.info('mapbox returned status 200.')
-        return resp_json
+      resp_json['search_text'] = ' '.join(search_terms)
+      logger.info('mapbox returned status 200.')
+      return resp_json
     else:
-        # logger.info('mapbox returned non 200 response.')
-        logger.warning('mapbox returned status {} response.'.format(resp.status_code))
-        return {}
+      # logger.info('mapbox returned non 200 response.')
+      logger.warning('mapbox returned status {} response.'.format(resp.status_code))
+      return {}
+      
 
 def get_prediction_from_api(image_path):
-    api_url = "localhost:8003/webAPI"
+    api_url = "http://localhost:8003/webAPI"
     with open(image_path, "rb") as a_file:
         file_dict = {"images" : a_file}
         logger.info('read image, sending to prediction api')

@@ -65,7 +65,6 @@ INSTALLED_APPS = [
     "django_rq",
     'constance',
     'constance.backends.database',
-    'drf_yasg',
 ]
 
 CONSTANCE_BACKEND = 'constance.backends.database.DatabaseBackend'
@@ -106,7 +105,6 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
     ),
-    'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',
     'DEFAULT_FILTER_BACKENDS':
     ('django_filters.rest_framework.DjangoFilterBackend', ),
     'DEFAULT_PAGINATION_CLASS':
@@ -195,7 +193,7 @@ CACHES = {
 RQ_QUEUES = {
     'default': {
         'USE_REDIS_CACHE': 'default',
-        'DEFAULT_TIMEOUT': 60 * 60 * 24 * 7,
+        'DEFAULT_TIMEOUT': 36000,
         'DB': 0
     }
 }
@@ -268,24 +266,3 @@ CORS_ORIGIN_ALLOW_ALL = False
 CORS_ALLOW_CREDENTIALS = True
 
 IMAGE_SIMILARITY_SERVER = 'http://localhost:8002'
-
-
-#Must be less or egal of nb core CPU ( Nearly 2GB per process)
-HEAVYWEIGHT_PROCESS_ENV = os.environ.get('HEAVYWEIGHT_PROCESS', '1')
-HEAVYWEIGHT_PROCESS = int(HEAVYWEIGHT_PROCESS_ENV) if HEAVYWEIGHT_PROCESS_ENV.isnumeric() else 1
-
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['console'],
-            'level': 'INFO',
-        },
-    },
-}

@@ -1,5 +1,6 @@
 from api.models.photo import Photo
 from api.models.user import User, get_deleted_user
+from django.contrib.postgres.fields import JSONField
 from django.db import models
 
 
@@ -9,7 +10,7 @@ class AlbumDate(models.Model):
     date = models.DateField(db_index=True, null=True)
     photos = models.ManyToManyField(Photo)
     favorited = models.BooleanField(default=False, db_index=True)
-    location = models.JSONField(blank=True, db_index=True, null=True)
+    location = JSONField(blank=True, db_index=True, null=True)
     owner = models.ForeignKey(
         User, on_delete=models.SET(get_deleted_user), default=None)
     shared_to = models.ManyToManyField(
@@ -25,10 +26,8 @@ class AlbumDate(models.Model):
         return self.photos.all().order_by('-exif_timestamp')
 
 def get_or_create_album_date(date, owner):
-    try:
-        return AlbumDate.objects.get_or_create(date=date, owner=owner)[0]
-    except AlbumDate.MultipleObjectsReturned:
-        return AlbumDate.objects.filter(date=date, owner=owner).first()
+    return AlbumDate.objects.get_or_create(date=date, owner=owner)[0]
+
 def get_album_date(date, owner):
     try:
         return AlbumDate.objects.get(date=date, owner=owner)

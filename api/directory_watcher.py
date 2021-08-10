@@ -2,34 +2,33 @@ import datetime
 import hashlib
 import os
 import stat
+
 import magic
 import pytz
-import ownphotos.settings
-from django import db
 from django.db.models import Q
 from django_rq import job
-from api.places365.places365 import place365_instance
+from PIL import Image
+
 import api.util as util
 from api.image_similarity import build_image_similarity_index
 from api.models import LongRunningJob, Photo
-from multiprocessing import Pool
-import api.models.album_thing
-from wand.image import Image
 
-def is_video(image_path):
-    mime = magic.Magic(mime=True)
-    filename = mime.from_file(image_path)
-    return filename.find('video') != -1
 
-def is_valid_media(image_path):
-    if(is_video(image_path)):
-        return True
+def is_valid_media(filebuffer):
     try:
-        with Image(filename=image_path) as i:
-            return True
-    except Exception as e:
-        util.logger.info("Could not handle {}, because {}".format(image_path, str(e)))
+        filetype = magic.from_buffer(filebuffer, mime=True)
+        return (
+            "jpeg" in filetype
+            or "png" in filetype
+            or "bmp" in filetype
+            or "gif" in filetype
+            or "heic" in filetype
+            or "heif" in filetype
+        )
+    except:
+        util.logger.exception("An image throwed an exception")
         return False
+
 
 def calculate_hash(user, image_path):
     hash_md5 = hashlib.md5()
@@ -67,8 +66,8 @@ else:
 
 
 def handle_new_image(user, image_path, job_id):
-    if is_valid_media(image_path):
-        try:
+    try:
+        if is_valid_media(open(image_path, "rb").read(2048)):
             elapsed_times = {
                 "md5": None,
                 "thumbnails": None,
@@ -91,29 +90,38 @@ def handle_new_image(user, image_path, job_id):
             elapsed = (datetime.datetime.now() - start).total_seconds()
             elapsed_times["md5"] = elapsed
 
-            if not Photo.objects.filter(Q(image_hash=image_hash)).exists():
-                photo = Photo()
-                photo.image_paths.append(img_abs_path)
-                photo.owner=user
-                photo.image_hash=image_hash
-                photo.added_on=datetime.datetime.now().replace(tzinfo=pytz.utc)
-                photo.geolocation_json={}
-                photo.video = is_video(img_abs_path)
+            photo_exists = Photo.objects.filter(
+                Q(image_hash=image_hash)
+            ).exists()
+
+            if not photo_exists:
+                photo = Photo.objects.create(
+                    image_path=img_abs_path,
+                    owner=user,
+                    image_hash=image_hash,
+                    added_on=datetime.datetime.now().replace(tzinfo=pytz.utc),
+                    geolocation_json={},
+                )
+
                 start = datetime.datetime.now()
-                photo._generate_thumbnail(True)
-                photo._generate_captions(False)
-                photo._extract_gps_from_exif(False)
-                photo._geolocate_mapbox(False)
-                photo._im2vec(False)
-                photo._extract_date_time_from_exif(True)
-                photo._extract_faces()
+
+                photo._generate_thumbnail()
+                # photo._generate_captions()
+                photo._extract_date_time_from_exif()
+                photo._extract_gps_from_exif()
+                photo._geolocate_mapbox()
                 photo._add_to_album_place()
+                photo._extract_faces()
                 photo._add_to_album_date()
+                photo._add_to_album_thing()
+                # photo._im2vec()
 
                 elapsed = (datetime.datetime.now() - start).total_seconds()
-                util.logger.info( "job {}: image processed: {}, elapsed: {}".format(
-                    job_id, img_abs_path, elapsed
-                ))
+                util.logger.info(
+                    "job {}: image processed: {}, elapsed: {}".format(
+                        job_id, img_abs_path, elapsed
+                    )
+                )
 
                 if photo.image_hash == "":
                     util.logger.warning(
@@ -122,32 +130,9 @@ def handle_new_image(user, image_path, job_id):
                         )
                     )
             else:
-                photo = Photo.objects.filter(Q(image_hash=image_hash)).first()
-                photo.image_paths.append(img_abs_path)
-                photo.save()
-                photo._check_image_paths()
                 util.logger.warning(
                     "job {}: file {} exists already".format(job_id, image_path)
                 )
-        except Exception as e:
-            try:
-                util.logger.exception(
-                    "job {}: could not load image {}. reason: {}".format(
-                        job_id, image_path, str(e)
-                    )
-                )
-            except:
-                util.logger.exception(
-                    "job {}: could not load image {}".format(job_id, image_path)
-                )
-
-def rescan_image(user, image_path, job_id):
-    try:
-        if is_valid_media(image_path):
-            photo = Photo.objects.filter(Q(image_paths__contains=image_path)).get()
-            photo._generate_thumbnail(False)
-            photo._extract_date_time_from_exif(True)
-            
 
     except Exception as e:
         try:
@@ -161,6 +146,27 @@ def rescan_image(user, image_path, job_id):
                 "job {}: could not load image {}".format(job_id, image_path)
             )
 
+
+def rescan_image(user, image_path, job_id):
+    try:
+        if is_valid_media(open(image_path, "rb").read(2048)):
+            photo = Photo.objects.filter(Q(image_path=image_path)).get()
+            photo._generate_thumbnail()
+            photo._extract_date_time_from_exif()
+
+    except Exception as e:
+        try:
+            util.logger.exception(
+                "job {}: could not load image {}. reason: {}".format(
+                    job_id, image_path, str(e)
+                )
+            )
+        except:
+            util.logger.exception(
+                "job {}: could not load image {}".format(job_id, image_path)
+            )
+
+
 def walk_directory(directory, callback):
     for file in os.scandir(directory):
         fpath = os.path.join(directory, file)
@@ -168,20 +174,37 @@ def walk_directory(directory, callback):
             if os.path.isdir(fpath):
                 walk_directory(fpath, callback)
             else:
-                callback.append(fpath)
+                callback.read_file(fpath)
 
-def photo_scanner(user, path, job_id):
-        if Photo.objects.filter(image_paths__contains=path).exists():
-            rescan_image(user, path, job_id)
+
+class file_counter:
+    counter = 0
+
+    def read_file(self, path):
+        self.counter += 1
+
+
+class photo_scanner:
+    def __init__(self, user, lrj, job_id, file_count):
+        self.to_add_count = file_count
+        self.job_id = job_id
+        self.counter = 0
+        self.user = user
+        self.lrj = lrj
+
+    def read_file(self, path):
+        # update progress
+        self.counter += 1
+        self.lrj.result = {
+            "progress": {"current": self.counter, "target": self.to_add_count}
+        }
+        self.lrj.save()
+        # scan new or update existing image
+        if Photo.objects.filter(image_path=path).exists():
+            rescan_image(self.user, path, self.job_id)
         else:
-            handle_new_image(user, path, job_id)
-        with db.connection.cursor() as cursor:
-            cursor.execute("""
-                update api_longrunningjob
-                set result = jsonb_set(result,'{"progress","current"}',
-                      ((jsonb_extract_path(result,'progress','current')::int + 1)::text)::jsonb
-                ) where job_id = %(job_id)s""",
-                {'job_id': str(job_id)})
+            handle_new_image(self.user, path, self.job_id)
+
 
 # job is currently not used, because the model.eval() doesn't execute when it is running as a job
 @job
@@ -189,6 +212,7 @@ def scan_photos(user, job_id):
     if LongRunningJob.objects.filter(job_id=job_id).exists():
         lrj = LongRunningJob.objects.get(job_id=job_id)
         lrj.started_at = datetime.datetime.now().replace(tzinfo=pytz.utc)
+        lrj.save()
     else:
         lrj = LongRunningJob.objects.create(
             started_by=user,
@@ -197,34 +221,25 @@ def scan_photos(user, job_id):
             started_at=datetime.datetime.now().replace(tzinfo=pytz.utc),
             job_type=LongRunningJob.JOB_SCAN_PHOTOS,
         )
-    lrj.save()
+        lrj.save()
+
     photo_count_before = Photo.objects.count()
 
     try:
-        photoList = []
-        walk_directory(user.scan_directory, photoList)
-        files_found = len(photoList)
+        fc = file_counter()  # first walk and count sum of files
+        walk_directory(user.scan_directory, fc)
+        files_found = fc.counter
 
-        all = []
-        for path in photoList:
-             all.append((user, path, job_id))
+        ps = photo_scanner(user, lrj, job_id, files_found)
+        walk_directory(user.scan_directory, ps)  # now walk with photo-scannning
 
-        lrj.result = {"progress": {"current": 0, "target": files_found}}
-        lrj.save()
-        db.connections.close_all()
-        with Pool(processes=ownphotos.settings.HEAVYWEIGHT_PROCESS) as pool:
-             pool.starmap(photo_scanner, all)
+        util.logger.info(
+            "Scanned {} files in : {}".format(files_found, user.scan_directory)
+        )
 
-        place365_instance.unload()
-        util.logger.info("Scanned {} files in : {}".format(files_found, user.scan_directory))
-        api.models.album_thing.update()
-        exisisting_photos = Photo.objects.filter(owner=user.id)
-        for existing_photo in exisisting_photos:
-            util.logger.info(existing_photo.image_paths)
-            existing_photo._check_image_paths()
         build_image_similarity_index(user)
     except Exception:
-        util.logger.exception("An error occured: ")
+        util.logger.exception("An error occured:")
         lrj.failed = True
 
     added_photo_count = Photo.objects.count() - photo_count_before

@@ -7,7 +7,7 @@ from django.db.models import Count, Prefetch, Q
 from rest_framework import serializers
 from django.core.cache import cache
 from api.image_similarity import search_similar_image
-from api.models import (AlbumAuto, AlbumDate, AlbumPlace, AlbumThing,
+from api.models import (AlbumAuto, AlbumDate, AlbumPlace, AlbumThing, AlbumCase,
                         AlbumUser, Face, LongRunningJob, Person, Photo, User)
 from api.util import logger
 
@@ -26,7 +26,7 @@ class SimpleUserSerializer(serializers.ModelSerializer):
 class PhotoEditSerializer(serializers.ModelSerializer):
     class Meta:
         model = Photo
-        fields = ('image_hash', 'hidden', 'favorited', 'video')
+        fields = ('image_hash', 'hidden', 'favorited')
 
     def update(self, instance, validated_data):
         #import pdb; pdb.set_trace()
@@ -48,7 +48,6 @@ class PhotoSuperSimpleSerializer(serializers.ModelSerializer):
             'hidden',
             'exif_timestamp',
             'public',
-            'video'
         )
 
 
@@ -56,13 +55,14 @@ class PhotoSuperSimpleSerializerWithAddedOn(serializers.ModelSerializer):
     class Meta:
         model = Photo
         fields = ('image_hash', 'favorited', 'hidden', 'exif_timestamp',
-                  'public', 'added_on', 'video')
+                  'public', 'added_on')
 
 
 class PhotoSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Photo
         fields = (
+            'thumbnail',
             'square_thumbnail',
             'image',
             'image_hash',
@@ -72,7 +72,6 @@ class PhotoSimpleSerializer(serializers.ModelSerializer):
             'favorited',
             'geolocation_json',
             'public',
-            'video'
         )
 
 
@@ -91,7 +90,7 @@ class PhotoSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     people = serializers.SerializerMethodField()
     shared_to = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
-    image_path = serializers.SerializerMethodField()
+
     class Meta:
         model = Photo
         fields = ('exif_gps_lat', 'exif_gps_lon', 'exif_timestamp',
@@ -102,7 +101,7 @@ class PhotoSerializer(serializers.ModelSerializer):
                   'small_square_thumbnail_url', 'tiny_square_thumbnail_url',
                   'geolocation_json', 'exif_json', 'people', 'image_url',
                   'image_hash', 'image_path', 'favorited', 'hidden', 'public',
-                  'shared_to', 'similar_photos', 'video')
+                  'shared_to', 'similar_photos', 'prediction_result')
 
     def get_similar_photos(self, obj):
         res = search_similar_image(obj.owner,obj)
@@ -120,12 +119,6 @@ class PhotoSerializer(serializers.ModelSerializer):
                 'places365': {'attributes':[],'categories':[],'environment':[]}
                 }
             return emptyArray
-
-    def get_image_path(self, obj):
-        try:
-            return obj.image_paths[0]
-        except:
-            return "Missing"
 
     def get_thumbnail_url(self, obj):
         try:
@@ -217,13 +210,13 @@ class PersonSerializer(serializers.ModelSerializer):
 
     def get_face_url(self, obj):
         try:
-            face = obj.faces.filter(Q(person_label_is_inferred=False)& Q(photo__hidden=False)).first()
+            face = obj.faces.first()
             return face.image.url
         except:
             return None
 
     def get_face_photo_url(self, obj):
-        first_face = obj.faces.filter(Q(person_label_is_inferred=False) & Q(photo__hidden=False)).first()
+        first_face = obj.faces.filter(Q(photo__hidden=False)).first()
         if first_face:
             return os.path.join(ownphotos.settings.MEDIA_URL, first_face.photo.square_thumbnail.name)
         else:
@@ -345,6 +338,96 @@ class AlbumDateSerializer(serializers.ModelSerializer):
         fields = ("id", "title", "date", "favorited", "photos")
 
 
+class AlbumCaseSerializer(serializers.ModelSerializer):
+    photos = PhotoSuperSimpleSerializer(many=True, read_only=True)
+    shared_to = SimpleUserSerializer(many=True, read_only=True)
+    owner = SimpleUserSerializer(many=False, read_only=True)
+
+
+    class Meta:
+        model = AlbumCase
+        fields = ("id", "title", "photos", "created_on", "favorited", "owner", 
+                  "shared_to")
+
+class AlbumCaseListSerializer(serializers.ModelSerializer):
+    owner = SimpleUserSerializer(many=False, read_only=True)
+    cover_photos = PhotoHashListSerializer(many=True, read_only=True)
+    photo_count = serializers.SerializerMethodField()
+    shared_to = SimpleUserSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = AlbumCase
+        fields = (
+            "id",
+            "cover_photos",
+            "created_on",
+            "favorited",
+            "title",
+            "shared_to",
+
+            "owner",
+            "photo_count")
+
+    def get_photo_count(self, obj):
+        try:
+            return obj.photo_count
+        except:  # for when calling AlbumUserListSerializer(obj).data directly
+            return obj.photos.count()
+
+
+class AlbumCaseEditSerializer(serializers.ModelSerializer):
+    photos = serializers.PrimaryKeyRelatedField(
+        many=True, read_only=False, queryset=Photo.objects.all())
+
+    class Meta:
+        model = AlbumCase
+        fields = ("id", "title", "photos", "created_on", "favorited")
+
+    def validate_photos(self, value):
+        return [v.image_hash for v in value]
+
+    def create(self, validated_data):
+        title = validated_data['title']
+        image_hashes = validated_data['photos']
+
+        user = None
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            user = request.user
+
+        # check if an album exists with the given title and call the update method if it does
+        instance, created = AlbumCase.objects.get_or_create(
+            title=title, owner=user)
+        if not created:
+            return self.update(instance, validated_data)
+
+        photos = Photo.objects.in_bulk(image_hashes)
+        for pk, obj in photos.items():
+            instance.photos.add(obj)
+        instance.save()
+        cache.clear()
+        logger.info(u'Created user album {} with {} photos'.format(
+            instance.id, len(photos)))
+        return instance
+
+    def update(self, instance, validated_data):
+        image_hashes = validated_data['photos']
+
+        photos = Photo.objects.in_bulk(image_hashes)
+        photos_already_in_album = instance.photos.all()
+        cnt = 0
+        for pk, obj in photos.items():
+            if obj not in photos_already_in_album:
+                cnt += 1
+                instance.photos.add(obj)
+        instance.save()
+        cache.clear()
+        logger.info(u'Added {} photos to case album {}'.format(
+            cnt, instance.id))
+        return instance
+
+
+
 class AlbumDateListSerializer(serializers.ModelSerializer):
     people = serializers.SerializerMethodField()
     cover_photo_url = serializers.SerializerMethodField()
@@ -378,6 +461,14 @@ class AlbumDateListSerializer(serializers.ModelSerializer):
                 if serialized_person not in res:
                     res.append(serialized_person)
         return res
+
+
+class AlbumDateListWithPhotoHashSerializer(serializers.ModelSerializer):
+    photos = PhotoSuperSimpleSerializer(many=True, read_only=True)
+    class Meta:
+        model = AlbumDate
+        fields = ("location", "id", "photos", "date")
+
 
 class AlbumPersonSerializer(serializers.ModelSerializer):
     photos = serializers.SerializerMethodField()
@@ -416,17 +507,17 @@ class AlbumPersonListSerializer(serializers.ModelSerializer):
         )
 
     def get_photo_count(self, obj):
-        return obj.filter(Q(person_label_is_inferred=False)).faces.count()
+        return obj.faces.count()
 
     def get_cover_photo_url(self, obj):
-        first_face = obj.faces.filter(Q(person_label_is_inferred=False)).first()
+        first_face = obj.faces.first()
         if first_face:
             return first_face.photo.square_thumbnail.url
         else:
             return None
 
     def get_face_photo_url(self, obj):
-        first_face = obj.faces.filter(Q(person_label_is_inferred=False)).first()
+        first_face = obj.faces.first()
         if first_face:
             return first_face.photo.image.url
         else:
@@ -439,7 +530,7 @@ class AlbumUserEditSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AlbumUser
-        fields = ("id", "title", "photos", "created_on", "favorited")
+        fields = ("id", "title", "photos", "created_on", "favorited", "search_location")
 
     def validate_photos(self, value):
         return [v.image_hash for v in value]
@@ -462,6 +553,7 @@ class AlbumUserEditSerializer(serializers.ModelSerializer):
         photos = Photo.objects.in_bulk(image_hashes)
         for pk, obj in photos.items():
             instance.photos.add(obj)
+            instance.search_location = obj.search_location
         instance.save()
         cache.clear()
         logger.info(u'Created user album {} with {} photos'.format(
@@ -493,7 +585,7 @@ class AlbumUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = AlbumUser
         fields = ("id", "title", "photos", "created_on", "favorited", "owner",
-                  "shared_to")
+                  "shared_to", "search_location")
 
 
 class AlbumUserListSerializer(serializers.ModelSerializer):
@@ -512,7 +604,8 @@ class AlbumUserListSerializer(serializers.ModelSerializer):
             "title",
             "shared_to",
             "owner",
-            "photo_count")
+            "photo_count",
+            "search_location")
 
     def get_photo_count(self, obj):
         try:
@@ -621,10 +714,10 @@ class UserSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         # if 'scan_directory' in validated_data.keys():
         #     validated_data.pop('scan_directory')
-
         user = User.objects.create_user(**validated_data)
-        validated_data['scan_directory'] = "/var/lib/librephotos/data/" + str(user.id)+"/"
-        logger.info("Create directory "+ validated_data['scan_directory'])
+        # if 'scan_directory' not in validated_data.keys() or validated_data['scan_directory'] == "initial":
+        #     validated_data['scan_directory'] = "/var/lib/librephotos/data/" + user.id+"/"
+        #     logger.info("Create directory "+ validated_data['scan_directory'])
         logger.info("Created user {}".format(user.id))
         cache.clear()
         return user
@@ -721,7 +814,7 @@ class SharedToMePhotoSuperSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Photo
         fields = ('image_hash', 'favorited', 'hidden', 'exif_timestamp',
-                  'public', 'owner', 'video')
+                  'public', 'owner')
 
 
 class SharedPhotoSuperSimpleSerializer(serializers.ModelSerializer):
@@ -732,7 +825,7 @@ class SharedPhotoSuperSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Photo
         fields = ('image_hash', 'favorited', 'hidden', 'exif_timestamp',
-                  'public', 'owner', 'shared_to', 'video')
+                  'public', 'owner', 'shared_to')
 
 
 class SharedFromMePhotoThroughSerializer(serializers.ModelSerializer):
@@ -742,3 +835,4 @@ class SharedFromMePhotoThroughSerializer(serializers.ModelSerializer):
     class Meta:
         model = Photo.shared_to.through
         fields = ('user_id', 'user', 'photo')
+

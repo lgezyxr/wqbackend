@@ -8,7 +8,7 @@ from collections import Counter
 
 from django.db.models.functions import TruncMonth
 from django.db.models import Count, Q
-from django.db import connection
+
 import random
 from datetime import date, datetime
 from itertools import groupby
@@ -159,8 +159,8 @@ def get_search_term_examples(user):
 
             term_time = random.choice(datum['time'])
             search_terms.append(term_time)
-            if(datum['things']):
-                term_thing = random.choice(datum['things'])
+
+            term_thing = random.choice(datum['things'])
 
             if len(datum['people']) > 0:
                 term_people = random.choice(datum['people'])
@@ -204,10 +204,8 @@ def get_search_term_examples(user):
     return list(set(search_terms))
 
 
-
 def get_count_stats(user):
     num_photos = Photo.objects.filter(owner=user).count()
-    num_missing_photos = Photo.objects.filter(Q(owner=user) & Q(image_paths=[])).count()
     num_faces = Face.objects.filter(photo__owner=user).count()
     num_unknown_faces = Face.objects.filter(
         Q(person__name__exact='unknown') & Q(photo__owner=user)).count()
@@ -223,7 +221,6 @@ def get_count_stats(user):
 
     res = {
         "num_photos": num_photos,
-        "num_missing_photos": num_missing_photos, 
         "num_faces": num_faces,
         "num_people": num_people,
         "num_unknown_faces": num_unknown_faces,
@@ -373,41 +370,78 @@ def get_photo_month_counts(user):
     else:
         return []
 
+
+captions_sw = [
+    'a', 'of', 'the', 'on', 'in', 'at', 'has', 'holding', 'wearing', 'with',
+    'this', 'there', 'man', 'woman', '<unk>', 'along', 'no', 'is', 'big',
+    'small', 'large', 'and', 'backtround', 'looking', 'for', 'it', 'area',
+    'distance', 'was', 'white', 'black', 'brown', 'blue', 'background',
+    'ground', 'lot', 'red', 'wall', 'green', 'two', 'one', 'top', 'bottom',
+    'behind', 'front', 'building', 'shirt', 'hair', 'are', 'scene', 'tree',
+    'trees', 'sky', 'window', 'windows', 'standing', 'glasses', 'building',
+    'buildings'
+]
+captions_sw = [
+    'a', 'of', 'the', 'on', 'in', 'at', 'has', 'with', 'this', 'there',
+    'along', 'no', 'is', 'it', 'was', 'are', 'background'
+]
+
+
 def get_searchterms_wordcloud(user):
-    query = {}
-    out = {'captions' : [], 'people' : [], 'locations' : []}
-    query['captions'] = """
-        with captionList as (
-            select unnest(regexp_split_to_array(search_captions,' , ')) caption
-            from api_photo where owner_id = %(userid)s
-        )
-        select caption, count(*) from captionList group by caption order by count(*) desc limit 100;
-    """
-    query['people']= """
-        with NameList as (
-            select api_person.name
-            from api_photo join api_face on image_hash = api_face.photo_id
-            join api_person on person_id = api_person.id
-            where owner_id = %(userid)s
-        )
-        select name, count(*) from NameList group by name order by count(*) desc limit 100;
-    """
-    query['locations'] = """
-         with arrayloctable as (
-            select jsonb_array_elements(jsonb_extract_path(api_photo.geolocation_json,  'features')::jsonb) arrayloc , image_hash
-            from api_photo where owner_id = %(userid)s
-        ), loctable as (
-            select jsonb_array_elements(jsonb_extract_path(arrayloc,'place_type'))::text as "key",
-            replace(jsonb_extract_path(arrayloc,'text')::text,'"','') as "value", image_hash 
-            from arrayloctable
-        ), OneWordPerPhoto as (  -- "key" values can be : "place","locality","address","region","postcode","country","poi"
-            select "value", image_hash from loctable where "key" not in ('"postcode"','"poi"') group by "value", image_hash
-        )
-        select "value", count(*) from OneWordPerPhoto group by "value" order by count(*) desc limit 100
-    """
-    for type in ('captions','people','locations'):
-        with connection.cursor() as cursor:
-            cursor.execute(query[type],{'userid':user.id})
-            for row in cursor.fetchall():
-                out[type].append({'label':row[0],'y':np.log(row[1])})
+    photos = Photo.objects.filter(owner=user).prefetch_related('faces__person')
+    captions = []
+    locations = []
+    people = []
+
+    location_entities = []
+    for photo in photos:
+        faces = photo.faces.all()
+        for face in faces:
+            people.append(face.person.name)
+        if photo.search_captions:
+            captions.append(photo.search_captions)
+        if photo.search_location:
+            locations.append(photo.search_location)
+        if photo.geolocation_json and 'features' in photo.geolocation_json.keys(
+        ):
+
+            for feature in photo.geolocation_json['features']:
+                if not feature['text'].isdigit(
+                ) and 'poi' not in feature['place_type']:
+                    location_entities.append(feature['text'].replace(
+                        '(', '').replace(')', ''))
+
+    caption_tokens = ' '.join(captions).replace(',', ' ').split()
+    location_tokens = ' '.join(locations).replace(',', ' ').replace(
+        '(', ' ').replace(')', ' ').split()
+
+    caption_tokens = [
+        t for t in caption_tokens
+        if not t.isdigit() and t.lower() not in captions_sw
+    ]
+    location_tokens = [t for t in location_tokens if not t.isdigit()]
+
+    caption_token_counts = Counter(caption_tokens)
+    location_token_counts = Counter(location_entities)
+
+    people_counts = Counter(people)
+
+    caption_token_counts = [{
+        'label': key,
+        'y': np.log(value)
+    } for key, value in caption_token_counts.most_common(50)]
+    location_token_counts = [{
+        'label': key,
+        'y': np.log(value)
+    } for key, value in location_token_counts.most_common(50)]
+    people_counts = [{
+        'label': key,
+        'y': np.log(value)
+    } for key, value in people_counts.most_common(50)]
+
+    out = {
+        'captions': caption_token_counts,
+        'locations': location_token_counts,
+        'people': people_counts
+    }
     return out

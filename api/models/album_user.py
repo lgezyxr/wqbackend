@@ -1,7 +1,7 @@
 from api.models.photo import Photo
 from api.models.user import User, get_deleted_user
 from django.db import models
-
+from django.contrib.postgres.fields import JSONField
 
 class AlbumUser(models.Model):
     title = models.CharField(max_length=512)
@@ -13,7 +13,7 @@ class AlbumUser(models.Model):
 
     shared_to = models.ManyToManyField(
         User, related_name='album_user_shared_to')
-
+    search_location = models.TextField(blank=True, null=True, db_index=True)
     public = models.BooleanField(default=False, db_index=True)
 
     class Meta:

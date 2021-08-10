@@ -5,9 +5,10 @@ from django.db import models
 
 
 class AlbumCase(models.Model):
-    title = models.CharField(max_length=512)
+    title = models.CharField(max_length=512, default=None)
     created_on = models.DateTimeField(auto_now=True, db_index=True)
     photos = models.ManyToManyField(Photo)
+    description = models.CharField(max_length=1024, default=None)
     favorited = models.BooleanField(default=False, db_index=True)
     owner = models.ForeignKey(
         User, on_delete=models.SET(get_deleted_user), default=None)

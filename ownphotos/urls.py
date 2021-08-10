@@ -14,30 +14,21 @@ Including another URLconf
     2. Add a URL to urlpatterns:  url(r'^blog/', include('blog.urls'))
 """
 from api import views
+# from api.views import media_access
+# from django.conf import settings
 from django.conf.urls import include, url, re_path
-from django.conf.urls.static import static
-from django.conf import settings
+# from django.conf.urls.static import static
 from django.contrib import admin
+# from django.urls import path
 from nextcloud import views as nextcloud_views
 from rest_framework import routers
-from rest_framework_simplejwt.serializers import (TokenObtainPairSerializer, TokenRefreshSerializer)
-from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
-from rest_framework import permissions
-from drf_yasg.views import get_schema_view
-from drf_yasg import openapi
+# from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework_simplejwt.serializers import (TokenObtainPairSerializer,
+                                                  TokenRefreshSerializer)
+from rest_framework_simplejwt.views import (TokenObtainPairView,
+                                            TokenRefreshView)
 
-schema_view = get_schema_view(
-   openapi.Info(
-      title="OilDetect API",
-      default_version='v1',
-      description="All of the API endpoints in OilDetect",
-      terms_of_service="https://www.google.com/policies/terms/",
-      contact=openapi.Contact(email="contact@snippets.local"),
-      license=openapi.License(name="MIT License"),
-   ),
-   public=True,
-   permission_classes=(permissions.AllowAny,),
-)
+
 class TokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
@@ -105,9 +96,18 @@ router.register(
     views.AlbumThingListViewSet,
     basename='album_thing')
 router.register(
+    r'api/albums/case/list',
+    views.AlbumCaseListViewSet,
+    basename='album_case')
+router.register(
     r'api/albums/place/list',
     views.AlbumPlaceListViewSet,
     basename='album_place')
+# router.register(
+#     r'api/albums/case/list',
+#     views.AlbumCaseListViewSet,
+#     basename='album_case')
+
 router.register(
     r'api/albums/user/list',
     views.AlbumUserListViewSet,
@@ -117,6 +117,11 @@ router.register(
     r'api/albums/user/edit',
     views.AlbumUserEditViewSet,
     basename='album_user')
+    
+router.register(
+    r'api/albums/case/edit',
+    views.AlbumCaseEditViewSet,
+    basename='album_case')
 
 router.register(
     r'api/albums/user/shared/tome',
@@ -135,7 +140,11 @@ router.register(r'api/albums/date', views.AlbumDateViewSet)
 router.register(
     r'api/albums/thing', views.AlbumThingViewSet, basename='album_thing')
 router.register(
+    r'api/albums/case', views.AlbumCaseViewSet, basename='album_case')
+router.register(
     r'api/albums/place', views.AlbumPlaceViewSet, basename='album_place')
+# router.register(
+#     r'api/albums/case', views.AlbumCaseViewSet, basename='album_case')
 router.register(
     r'api/albums/user', views.AlbumUserViewSet, basename='album_user')
 
@@ -198,9 +207,6 @@ router.register(r'api/faces', views.FaceViewSet)
 router.register(r'api/jobs', views.LongRunningJobViewSet)
 
 urlpatterns = [
-    url(r'^api/swagger/json', schema_view.without_ui(cache_timeout=0), name='schema-json'),
-    url(r'^api/swagger', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    url(r'^api/redoc', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
     url(r'^', include(router.urls)),
     url(r'^admin/', admin.site.urls),
     url(r'^api/sitesettings', views.SiteSettingsView.as_view()),
@@ -213,6 +219,8 @@ urlpatterns = [
     url(r'^api/photosedit/share', views.SetPhotosShared.as_view()),
     url(r'^api/photosedit/generateim2txt',
         views.GeneratePhotoCaption.as_view()),
+    url(r'^api/photosedit/predictphoto',
+        views.PredictPhoto.as_view()),
     url(r'^api/useralbum/share', views.SetUserAlbumShared.as_view()),
     url(r'^api/facetolabel', views.FaceToLabelView.as_view()),
     url(r'^api/trainfaces', views.TrainFaceView.as_view()),
@@ -220,7 +228,7 @@ urlpatterns = [
     url(r'^api/socialgraph', views.SocialGraphView.as_view()),
     url(r'^api/egograph', views.EgoGraphView.as_view()),
     url(r'^api/scanphotos', views.ScanPhotosView.as_view()),
-    url(r'^api/deletemissingphotos', views.DeleteMissingPhotosView.as_view()),
+
     url(r'^api/autoalbumgen', views.AutoAlbumGenerateView.as_view()),
     url(r'^api/autoalbumtitlegen', views.RegenerateAutoAlbumTitles.as_view()),
     url(r'^api/searchtermexamples', views.SearchTermExamples.as_view()),
@@ -231,8 +239,7 @@ urlpatterns = [
     url(r'^api/photocountrycounts', views.PhotoCountryCountsView.as_view()),
     url(r'^api/photomonthcounts', views.PhotoMonthCountsView.as_view()),
     url(r'^api/wordcloud', views.SearchTermWordCloudView.as_view()),
-    url(r'^api/photosedit/predictphoto',
-        views.PredictPhoto.as_view()),
+
     url(r'^api/similar', views.SearchSimilarPhotosView.as_view()),
 
     url(r'^api/watcher/photo', views.IsPhotosBeingAddedView.as_view()),
@@ -243,7 +250,7 @@ urlpatterns = [
     url(r'^media/(?P<path>.*)/(?P<fname>.*)',
         views.MediaAccessFullsizeOriginalView.as_view(),
         name='media'),
-
+#    url(r'^api/createalbumcase/$', views.AlbumCaseCreateView.as_view()),
     url(r'^api/rqavailable/$', views.QueueAvailabilityView.as_view()),
     url(r'^api/rqjobstat/$', views.RQJobStatView.as_view()),
     url(r'^api/rqjoblist/$', views.ListAllRQJobsView.as_view()),
@@ -251,10 +258,8 @@ urlpatterns = [
     url(r'^api/nextcloud/listdir', nextcloud_views.ListDir.as_view()),
     url(r'^api/nextcloud/scanphotos',
         nextcloud_views.ScanPhotosView.as_view()),
-    url(r'^api/photos/download', views.ZipListPhotosView.as_view()),
     re_path(r'^api/upload/(?P<filename>[^/]+)$', views.UploadView.as_view())
 ]
 
 urlpatterns += [url('api/django-rq/', include('django_rq.urls'))]
-urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 # urlpatterns += [url(r'^silk/', include('silk.urls', namespace='silk'))]

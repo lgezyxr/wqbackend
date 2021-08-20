@@ -37,7 +37,7 @@ RQ_API_TOKEN = os.environ['SECRET_KEY']
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = (os.environ.get('DEBUG', '') == '1')
 
-ALLOWED_HOSTS = ['backend', 'localhost', os.environ.get('BACKEND_HOST')]
+ALLOWED_HOSTS = ['backend', 'localhost', os.environ.get('BACKEND_HOST'), '*']
 
 AUTH_USER_MODEL = 'api.User'
 

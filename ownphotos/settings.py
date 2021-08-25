@@ -94,8 +94,6 @@ CORS_ALLOW_HEADERS = (
 
 CORS_ORIGIN_WHITELIST = (
     'http://localhost:3000',
-    'http://192.168.1.100:3000',
-    'http://igskrgcbgs06648.gs.doi.net:3000',
     'http://igskrgcbgs06648.gs.doi.net'
 )
 
